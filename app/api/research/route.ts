@@ -3,6 +3,7 @@ import Groq from "groq-sdk";
 import { fetchStockData, formatMarketCap } from "@/lib/yahoo-finance";
 import { calcBuffettScore } from "@/lib/buffett-score";
 import { searchCompanyNews, searchCompetitors } from "@/lib/tavily";
+import { rateLimit } from "@/lib/rate-limit";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -20,9 +21,26 @@ function fmt(v: number | null, suffix = "", d = 1) {
   return `${v.toFixed(d)}${suffix}`;
 }
 
+const VALID_CODE = /^[A-Z0-9]{1,10}(-[A-Z]{1,2})?$/;
+
 export async function GET(req: NextRequest) {
-  const code = req.nextUrl.searchParams.get("code")?.toUpperCase();
-  if (!code) return new Response("code required", { status: 400 });
+  // レートリミット
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  if (!rateLimit(ip)) {
+    return new Response(JSON.stringify({ error: "リクエスト上限に達しました。1分後に再試行してください。" }), {
+      status: 429,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  // 入力バリデーション
+  const code = req.nextUrl.searchParams.get("code")?.toUpperCase().trim();
+  if (!code || !VALID_CODE.test(code)) {
+    return new Response(JSON.stringify({ error: "無効な証券コードです" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   const encoder = new TextEncoder();
 
